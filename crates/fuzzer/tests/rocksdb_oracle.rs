@@ -1,6 +1,6 @@
 //! End-to-end oracle test against a REAL RocksDB instance (not the
 //! self-contained `oracle` crate's naive reference — this shells out to
-//! `rocksdb_ldb` / `rocksdb_sst_dump`, exercising the actual thing
+//! RocksDB's own `ldb` / `sst_dump` CLI tools, exercising the actual thing
 //! compactor is meant to replace).
 //!
 //! Protocol (see conversation history for why each step is shaped this
@@ -25,12 +25,35 @@
 //! 5. Ingest into a FRESH empty DB (not the original) and diff `ldb scan`
 //!    output against the ground truth from step 2.
 //!
-//! Requires `rocksdb_ldb` and `rocksdb_sst_dump` on PATH (Homebrew rocksdb
-//! formula). Skips (passes trivially with a message) if unavailable, since
-//! this is a real-binary integration test, not a pure-Rust unit test.
+//! Requires RocksDB's `ldb` and `sst_dump` CLI tools on PATH. Skips (passes
+//! trivially with a message) if unavailable, since this is a real-binary
+//! integration test, not a pure-Rust unit test.
+//!
+//! Binary names differ by packaging: Homebrew's `rocksdb` formula (macOS
+//! dev machines) installs them as `rocksdb_ldb`/`rocksdb_sst_dump`; Debian/
+//! Ubuntu's `rocksdb-tools` apt package (CI) installs plain `ldb`/`sst_dump`
+//! — confirmed directly against the `noble` package filelist, not assumed.
+//! `ldb_binary_name`/`sst_dump_binary_name` resolve whichever is actually on
+//! PATH, once, so the rest of this file doesn't care which packaging built
+//! the runner.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+fn resolve_binary_name(candidates: &[&'static str]) -> Option<&'static str> {
+    candidates.iter().copied().find(|name| have_binary(name))
+}
+
+fn ldb_binary_name() -> Option<&'static str> {
+    static NAME: OnceLock<Option<&'static str>> = OnceLock::new();
+    *NAME.get_or_init(|| resolve_binary_name(&["rocksdb_ldb", "ldb"]))
+}
+
+fn sst_dump_binary_name() -> Option<&'static str> {
+    static NAME: OnceLock<Option<&'static str>> = OnceLock::new();
+    *NAME.get_or_init(|| resolve_binary_name(&["rocksdb_sst_dump", "sst_dump"]))
+}
 
 /// `compact_files` is a binary owned by the `compactor` crate, a sibling
 /// package (not a dependency of `fuzzer`'s own Cargo.toml in the binary
@@ -66,10 +89,13 @@ fn have_binary(name: &str) -> bool {
 }
 
 fn run_ldb(db: &Path, extra_args: &[&str]) -> (String, String, bool) {
-    let mut cmd = Command::new("rocksdb_ldb");
+    let name = ldb_binary_name().expect("ldb_binary_name() checked by caller before run_ldb");
+    let mut cmd = Command::new(name);
     cmd.arg(format!("--db={}", db.display()));
     cmd.args(extra_args);
-    let out = cmd.output().expect("failed to spawn rocksdb_ldb");
+    let out = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn {name}: {e}"));
     (
         String::from_utf8_lossy(&out.stdout).to_string(),
         String::from_utf8_lossy(&out.stderr).to_string(),
@@ -87,10 +113,12 @@ fn sst_files_in(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn sst_dump_scan(path: &Path) -> String {
-    let out = Command::new("rocksdb_sst_dump")
+    let name = sst_dump_binary_name()
+        .expect("sst_dump_binary_name() checked by caller before sst_dump_scan");
+    let out = Command::new(name)
         .args([&format!("--file={}", path.display()), "--command=scan"])
         .output()
-        .expect("failed to spawn rocksdb_sst_dump");
+        .unwrap_or_else(|e| panic!("failed to spawn {name}: {e}"));
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
@@ -109,9 +137,10 @@ fn normalize_scan_line(line: &str) -> Option<String> {
 
 #[test]
 fn compactor_output_ingests_into_rocksdb_and_reads_back_identically() {
-    if !have_binary("rocksdb_ldb") || !have_binary("rocksdb_sst_dump") {
+    if ldb_binary_name().is_none() || sst_dump_binary_name().is_none() {
         eprintln!(
-            "SKIP: rocksdb_ldb / rocksdb_sst_dump not found on PATH (install via `brew install rocksdb`)"
+            "SKIP: no ldb/sst_dump on PATH (macOS: `brew install rocksdb`; \
+             Debian/Ubuntu: `apt-get install rocksdb-tools`)"
         );
         return;
     }
@@ -237,7 +266,7 @@ fn compactor_output_ingests_into_rocksdb_and_reads_back_identically() {
     );
 
     // Step 4: verify validity, then ingest into a FRESH db.
-    let check = Command::new("rocksdb_sst_dump")
+    let check = Command::new(sst_dump_binary_name().expect("checked by the SKIP guard above"))
         .args([
             &format!("--file={}", output_sst.display()),
             "--command=check",
@@ -298,9 +327,10 @@ fn compactor_output_ingests_into_rocksdb_and_reads_back_identically() {
 ///   folded into the compacted file.
 #[test]
 fn compactor_output_replaces_real_dbs_files_and_survives_repair_and_restart() {
-    if !have_binary("rocksdb_ldb") || !have_binary("rocksdb_sst_dump") {
+    if ldb_binary_name().is_none() || sst_dump_binary_name().is_none() {
         eprintln!(
-            "SKIP: rocksdb_ldb / rocksdb_sst_dump not found on PATH (install via `brew install rocksdb`)"
+            "SKIP: no ldb/sst_dump on PATH (macOS: `brew install rocksdb`; \
+             Debian/Ubuntu: `apt-get install rocksdb-tools`)"
         );
         return;
     }
@@ -383,7 +413,7 @@ fn compactor_output_replaces_real_dbs_files_and_survives_repair_and_restart() {
         "compact_files failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let check = Command::new("rocksdb_sst_dump")
+    let check = Command::new(sst_dump_binary_name().expect("checked by the SKIP guard above"))
         .args([
             &format!("--file={}", output_sst.display()),
             "--command=check",

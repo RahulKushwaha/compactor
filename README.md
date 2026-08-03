@@ -1,5 +1,7 @@
 # compactor
 
+[![e2e](https://github.com/RahulKushwaha/compactor/actions/workflows/e2e.yml/badge.svg)](https://github.com/RahulKushwaha/compactor/actions/workflows/e2e.yml)
+
 A from-scratch Rust reimplementation of RocksDB's SST file format and offline
 compaction. Reads and writes real RocksDB block-based SST files, merges N
 sorted input SSTs, drops obsolete versions and tombstones, and writes a
@@ -86,7 +88,24 @@ cargo bench --bench merge_bench   # criterion; compares heap vs loser-tree, Vec 
 
 Tests in `crates/fuzzer/tests/rocksdb_oracle.rs` shell out to real RocksDB
 tooling (`ldb`, `sst_dump`) — expect these to be slower than the rest of the
-suite.
+suite. They resolve either binary naming in use (Homebrew's
+`rocksdb_ldb`/`rocksdb_sst_dump` on macOS, or plain `ldb`/`sst_dump` from
+Debian/Ubuntu's `rocksdb-tools` package) and skip with a message if neither
+is on PATH.
+
+## CI
+
+`.github/workflows/e2e.yml` runs the full merge → ingest → verify workflow on
+every push/PR: install `rocksdb-tools`, build, then run
+`rocksdb_oracle`'s tests — real RocksDB workload, snapshot the
+pre-compaction SSTs, merge them with `compact_files`, ingest the result into
+a fresh RocksDB instance (and separately, drop it into an existing DB's
+directory and run `ldb repair` to rebuild the manifest — the closest thing to
+"reboot RocksDB" without a live server process), then diff what RocksDB
+reads back against ground truth captured before compaction ran. The job
+fails loudly (not a silent pass) if the RocksDB tools aren't actually
+present, since that test skips gracefully by design for local dev machines
+without them.
 
 ## Testing strategy
 

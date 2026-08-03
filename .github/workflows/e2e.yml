@@ -1,0 +1,44 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  merge-and-verify:
+    name: merge SSTs, ingest into RocksDB, verify data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install RocksDB CLI tools (ldb, sst_dump)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rocksdb-tools
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --workspace --release
+
+      # crates/fuzzer/tests/rocksdb_oracle.rs is the actual end-to-end
+      # workflow: run a real workload against RocksDB, snapshot the
+      # pre-compaction SSTs, merge them with compactor's own compact_files
+      # binary, ingest the result into a fresh RocksDB instance (and,
+      # separately, drop it straight into an existing DB's directory and let
+      # `ldb repair` rebuild the manifest — RocksDB's own file-driven
+      # recovery path, the closest thing to "reboot RocksDB" without an
+      # actual server process), then diff what RocksDB reads back against
+      # ground truth captured before compaction ever ran.
+      - name: Merge SSTs with compact_files, boot RocksDB, verify data
+        run: |
+          set -o pipefail
+          cargo test --release -p fuzzer --test rocksdb_oracle -- --nocapture 2>&1 | tee test_output.log
+          if grep -q "^SKIP:" test_output.log; then
+            echo "::error::rocksdb_oracle test skipped (ldb/sst_dump not found on PATH) — CI must not silently skip this"
+            exit 1
+          fi
