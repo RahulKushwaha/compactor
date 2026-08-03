@@ -1,0 +1,28 @@
+[package]
+name = "compactor"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "compactor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "compactor"
+path = "src/bin/compactor.rs"
+
+[dependencies]
+crc32c = "0.6"
+snap = "1"
+lz4_flex = "0.11"
+zstd = "0.13"
+xxhash-rust = { version = "0.8", features = ["xxh32", "xxh64", "xxh3"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+
+[dev-dependencies]
+rand = "0.8"
+criterion = "0.5"
+
+[[bench]]
+name = "merge_bench"
+harness = false

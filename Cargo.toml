@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/compactor",
+    "crates/oracle",
+    "crates/fuzzer",
+]
+
+[workspace.package]
+edition = "2024"
