@@ -12,10 +12,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-latest's apt `rocksdb-tools` is RocksDB 8.9.1 (noble), too old
+      # to read format_version=7 SSTs (added in RocksDB 10.4.0) — this
+      # crate's writer targets 7 (see sst_builder.rs FORMAT_VERSION), so an
+      # apt-installed sst_dump/ldb rejects its own output with "Corrupt or
+      # unsupported format_version: 7". Use Homebrew instead: its `rocksdb`
+      # formula tracks upstream releases (11.1.2 as of writing, same version
+      # already verified locally on macOS) and understands format_version 7.
+      # Homebrew (Linuxbrew) is preinstalled on GitHub's ubuntu-latest
+      # runners but NOT on PATH by default (confirmed against the
+      # actions/runner-images Ubuntu 24.04 readme) — `brew shellenv` must be
+      # eval'd into $GITHUB_PATH/$GITHUB_ENV for later steps to see it.
       - name: Install RocksDB CLI tools (ldb, sst_dump)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y rocksdb-tools
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          brew install rocksdb
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
